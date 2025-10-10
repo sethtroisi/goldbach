@@ -1,0 +1,21 @@
+# Programs
+goldbach
+*.o
+a.out
+
+# data
+*.db
+logs/
+backup/
+perf.data
+
+# PrimeForms
+pfgw
+pfgw64
+pfgw.ini
+pfgw.log
+pfgw-prime.log
+
+# Random
+__pycache__/
+.gdb_history

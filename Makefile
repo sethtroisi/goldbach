@@ -18,9 +18,7 @@ OUT	= goldbach
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
 
-LDFLAGS	= -lgmp -lprimesieve
-# Need for local gmp / primesieve
-LDFLAGS+= -L /usr/local/lib
+LDFLAGS	= -lprimesieve
 
 
 all: $(OUT)

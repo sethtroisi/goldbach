@@ -248,15 +248,17 @@ void goldbach_search_single(const Config &config) {
         }
     }
 
+    primesieve::iterator it(std::max(config.n_0, uint64_t(3)));
+    uint64_t prime = it.next_prime();
     for (uint64_t m_i = 0 ; m_i < M_COUNT; m_i ++) {
         uint64_t M_0 = config.n_0 + M * m_i;
         uint64_t M_1 = M_0 + M-1;
         // [M_0, M_1]
 
-        primesieve::iterator it(std::max(M_0, uint64_t(3)));
-        uint64_t prime;
+        // Should/Could check prev_prime
+        assert(prime >= M_0 && prime < M_0 + 772);
 
-        for (prime = it.next_prime(); prime < M_1; prime = it.next_prime()) {
+        for (; prime <= M_1; prime = it.next_prime()) {
             uint64_t i = prime - M_0;
             assert( i <= M );
             if (false) {

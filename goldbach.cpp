@@ -223,7 +223,10 @@ void goldbach_search_single(const Config &config) {
     // Break up [n_0, n_1] into ranges of THREAD_SPACING
     uint64_t M = 2 * THREAD_SPACING;
     uint64_t M_COUNT = (n_1 - n_0 + 1 + M-1) / M;
-    atomic<size_t> brute_searches = 0;
+    size_t brute_searches = 0;
+    double setup_time = 0.0;
+    double search_time = 0.0;
+    double brute_time = 0.0;
 
     // Need primes up to MAX_Q prior to n_0
     uint64_t min_needed_prime = std::max<int64_t>((int64_t)n_0 - MAX_Q - MAX_PRIME_GAP, int64_t(3));
@@ -260,6 +263,8 @@ void goldbach_search_single(const Config &config) {
 
         // Handle updating prime_start to last prime <= M_0 - MAX_Q
         if (m_i > 0) {
+            auto setup_t = high_resolution_clock::now();
+
             min_needed_prime = std::max<int64_t>((int64_t) M_0 - MAX_Q, int64_t(3));
             //printf("\tAdvancing up to %lu, prime_start[%lu] = %lu to ", min_needed_prime, prime_start, circular_primes[prime_start]);
             uint32_t next_i = prime_start;
@@ -272,10 +277,13 @@ void goldbach_search_single(const Config &config) {
             assert( circular_primes[prime_start] <= min_needed_prime );
             assert( circular_primes[prime_start] + MAX_PRIME_GAP > min_needed_prime );
             assert( circular_primes[next_i] > min_needed_prime );
+
+            setup_time += duration<double>(high_resolution_clock::now() - setup_t).count();
         }
 
         // Should/Could check prev_prime
         assert(M_0 <= prime && prime < M_0 + MAX_PRIME_GAP);
+        auto search_t = high_resolution_clock::now();
 
         for (; prime <= M_1; prime = it.next_prime()) {
             circular_primes[prime_end++] = prime;
@@ -283,46 +291,31 @@ void goldbach_search_single(const Config &config) {
 
             uint64_t i = prime - M_0;
             assert( i <= M );
-            if (false) {
+            if (true) {
+                // Fast mask strategy
+                uint32_t t = i >> 1;
+                uint32_t mask_index = t & (MASK_BITS-1);
+                uint32_t c_i = i >> 7; // t >> 6;
+                for (auto mask : P_masks[mask_index]) {
+                    cleared[c_i++] |= mask;
+                }
+            } else {
+                // Slower prime-by-prime method of masking of bits.
                 for (const uint32_t q : P) {
                     uint32_t t = (i + q) >> 1;
                     cleared[t >> 6] |= 1UL << (t & (MASK_BITS-1));
                 }
-            } else {
-                // Faster mask strategy
-                uint32_t t = i >> 1;
-                uint32_t mask_index = t & (MASK_BITS-1);
-                uint32_t c_i = t >> 6;
-                for (auto mask : P_masks[mask_index]) {
-                    cleared[c_i++] |= mask;
-                }
-
-                // Verify mask strategy
-                if (false) {
-                    for (const uint32_t q : P) {
-                        uint32_t t = (i + q) >> 1;
-                        bool valid = cleared[t >> 6] & (1UL << (t & (MASK_BITS-1)));
-
-                        if ( !valid ) {
-                            printf("%u -> (%u, %u) from %lu + %u\n", t, t >> 6, t & 64, prime, q);
-
-                            uint32_t s = i >> 1;
-                            uint32_t c_i = s >> 6;
-                            printf("maskss[%u]\n", mask_index);
-                            for (auto mask : P_masks[mask_index]) {
-                                printf("\t%u |= %lx ([%u] = %lu)\n", c_i++, mask, t & 63, mask & (1UL << (t & 63)));
-                            }
-                        }
-                        assert( valid );
-                    }
-                }
             }
         }
+
+        search_time += duration<double>(high_resolution_clock::now() - search_t).count();
 
         // Verify all cleared
         {
             // Add final prime at prime_end without increment.
             circular_primes[prime_end] = prime;
+
+            auto brute_t = high_resolution_clock::now();
 
             //printf("Verifying [%lu, %lu] primes(indexes %lu %lu) [%lu, %lu]\n",
             //       M_0, M_1, prime_start, prime_end, circular_primes[prime_start], circular_primes[prime_end]);
@@ -399,6 +392,7 @@ void goldbach_search_single(const Config &config) {
                     }
                 }
             }
+            brute_time += duration<double>(high_resolution_clock::now() - brute_t).count();
         }
 
 
@@ -408,9 +402,14 @@ void goldbach_search_single(const Config &config) {
 
         if (m_i < 10 || (m_i + 5 > M_COUNT)
                 || (m_i < 1024 && ((m_i & 127) == 0))
-                || ((m_i & 2047) == 0)) {
+                || (m_i < 10240 && ((m_i & 2047) == 0))
+                || ((m_i & 0xFFFFF) == 0)) {
             printf("\t[%lu, %lu] (%.1f%%) (brute: %lu)\n",
-                   M_0, M_1, 100.0 * m_i / M_COUNT, brute_searches.load());
+                   M_0, M_1, 100.0 * m_i / M_COUNT, brute_searches);
         }
     }
+
+    printf("\t[%lu, %lu) took %.1f = setup %.1f, search %.1f, verify %.1f\n",
+            n_0, n_1, setup_time + search_time + brute_time,
+            setup_time, search_time, brute_time);
 }

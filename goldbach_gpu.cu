@@ -32,14 +32,11 @@ using namespace std::chrono;
 void goldbach_gpu_search(const struct Config &config);
 
 // How much each bytes GPU thread processes
-constexpr uint32_t GPU_BYTES = 32'000;
+constexpr uint32_t GPU_BYTES = 320'000;
 
 // See https://oeis.org/A025019 and
 // "EMPIRICAL VERIFICATION OF THE EVEN GOLDBACH CONJECTURE" by TOMAS OLIVEIRA e SILVA
 constexpr uint32_t MAX_Q = 10'000;
-
-// must be greater than primepi(2 * GPU_BYTES * THREADS + MAX_Q)
-constexpr uint32_t PRIMES_SIZE = 10'000'000;
 
 
 struct Config {
@@ -351,6 +348,8 @@ void goldbach_search_single(const Config &config) {
 #include <vector>
 
 #include <cuda.h>
+#include "CUDASieve/cudasieve.hpp"
+
 
 #define CUDA_CHECK(action) cuda_check(action, #action, __FILE__, __LINE__)
 
@@ -407,7 +406,7 @@ void goldbach_gpu_search(const Config &config)
     vector<uint16_t> Q;
     primesieve::generate_primes(3, MAX_Q, &Q);
 
-    cudaEvent_t global_start, batch_start, stop;
+    //cudaEvent_t global_start, batch_start, stop;
     //CUDA_CHECK(cudaEventCreate (&global_start));
     //CUDA_CHECK(cudaEventCreate (&batch_start));
     //CUDA_CHECK(cudaEventCreate (&stop));
@@ -432,47 +431,57 @@ void goldbach_gpu_search(const Config &config)
     const auto n_0 = config.n_0 > OVERLAP ? (config.n_0 - OVERLAP) : 0;
     const auto n_1 = config.n_1;
 
-    printf("Testing [%lu, %lu) P <= %u, GPU_BYTES = %u, %lu primes\n",
+    printf("Testing [%lu, %lu) P <= %u, GPU_BYTES = %u, %lu primes\n\n",
             n_0, n_1, config.K, GPU_BYTES, P.size());
     assert( n_1 >= n_0 );
 
-    uint64_t *gpu_cleared;
+    //uint64_t *gpu_cleared;
     //CUDA_CHECK(cudaMalloc((void **)&gpu_cleared, TOTAL_BYTES));
     //CUDA_CHECK(cudaMemset((void **)&gpu_cleared, 0, TOTAL_BYTES));
 
-
-    uint64_t *primes = (uint64_t*) calloc(PRIMES_SIZE, sizeof(uint64_t));
-    uint64_t PRIME_BYTES = PRIMES_SIZE*sizeof(uint64_t);
-
-    uint64_t *gpu_primes;
+    //uint64_t *gpu_primes;
     //CUDA_CHECK(cudaMalloc((void **)&gpu_primes, PRIME_BYTES);
-
-    primesieve::iterator it(n_0);
 
     size_t interval_size = 2 * 8 * INTERVAL_BYTES;
     uint64_t interval_start = n_0;
     uint64_t interval_end = std::min(interval_start + interval_size, n_1);
 
+    uint64_t total_primes = 0;
     // XXX: atomic<uint16_t> max_needed_Q(0);
 
+    CudaSieve sieve;
+
     while (interval_start < n_1) {
+        {
+            sieve.top = interval_end - 1;
+            sieve.bottom = interval_start;
+            // TODO use sieve.setFlagOn(<N>)
+            // silent
+            sieve.flags[30] = 0;
+            // flags 29 and 20 are set but seem unused.
+
+            // Init d_primeOut
+            sieve.flags[0] = (interval_start == n_0);
+            //
+            sieve.flags[1] = (interval_start > n_0);
+
+            sieve.launchCtl();
+
+            uint64_t primes_in_range = sieve.kerneldata.getCount();
+
+            safeCudaFree(sieve.d_primeList);
+
+            printf("\tProcessing [%lu, %lu) with %lu primes\n\n",
+                    interval_start, interval_end, primes_in_range);
+
+            total_primes += primes_in_range;
+        }
+
         /* Call CUDA Kernel. */
         // kernel_goldbach_search<<<config.threads>>>(
         //    gpu_cleared,
         //    interval_start);
 
-        {
-            // XXX: use multiple threads to build up prime list
-            uint64_t prime = it.next_prime();
-            assert( prime >= interval_start );
-            size_t p_i = 0;
-            for (; prime < interval_end; prime = it.next_prime()) {
-                primes[p_i++] = prime;
-            }
-            assert( p_i < PRIMES_SIZE );
-            printf("\tProcessing [%lu, %lu) with %lu primes\n",
-                    interval_start, interval_end, p_i);
-        }
 
         // Copy overlap from the end back to the start for the next set of threads.
         //CUDA_CHECK(cudaMemcpy((void *)gpu_cleared, gpu_cleared + INTERVAL_BYTES, OVERLAP_BYTES, cudaMemcpyDeviceToDevice));
@@ -486,4 +495,5 @@ void goldbach_gpu_search(const Config &config)
     //CUDA_CHECK(cudaEventDestroy (global_start));
     //CUDA_CHECK(cudaEventDestroy (batch_start));
     //CUDA_CHECK(cudaEventDestroy (stop));
+    printf("\tTotal Primes: %lu\n", total_primes);
 }

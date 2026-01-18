@@ -2,6 +2,10 @@
 
 Reasonable implementation of naive algorithm for verifying Goldbach conjector.
 
+This branch is a failed attempt to speed up code on GPU.
+
+[CUDASieve](https://github.com/curtisseizert/CUDASieve) is much faster at counting primes, but actually enumerating them is only 2-5x faster than just using the CPU.
+
 ## Algorithm
 
 Uses a naive algorithm with one or two clever bithacks.

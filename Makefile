@@ -16,7 +16,7 @@ OPT     = -O3 -std=c++20 -g
 OBJS	=
 OUT	= goldbach
 CC	= g++
-CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
+CFLAGS	= $(OPT) -fopenmp -Wall -Werror -Wno-vla
 
 LDFLAGS	= -lprimesieve
 
@@ -30,7 +30,10 @@ goldbach: goldbach.cpp $(OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 goldbach_gpu: goldbach_gpu.cu $(OBJS)
-	nvcc $(OPT) -o $@ $^ $(LDFLAGS)
+	nvcc -o $@ $^ $(OPT) $(LDFLAGS) \
+		--generate-code arch=compute_61,code=sm_61 \
+		-I CUDASieve/include/ -L CUDASieve -lcudasieve  \
+		--compiler-options "-fopenmp -Wall -Werror -Wno-vla"
 
 .PHONY: all clean
 

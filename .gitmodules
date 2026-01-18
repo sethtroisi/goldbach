@@ -1,0 +1,3 @@
+[submodule "CUDASieve"]
+	path = CUDASieve
+	url = https://github.com/curtisseizert/CUDASieve

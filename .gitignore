@@ -1,5 +1,6 @@
 # Programs
 goldbach
+goldbach_gpu
 *.o
 a.out
 

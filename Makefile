@@ -27,9 +27,12 @@ all: $(OUT)
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
 
 goldbach: goldbach.cpp $(OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES)
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+
+goldbach_gpu: goldbach_gpu.cu $(OBJS)
+	nvcc $(OPT) -o $@ $^ $(LDFLAGS)
 
 .PHONY: all clean
 
 clean:
-	rm -f $(OUT) *.o
+	rm -f $(OUT) *.o goldbach_gpu

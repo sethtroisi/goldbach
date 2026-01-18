@@ -42,8 +42,8 @@ A small amount of care is needed for ranges near the end of the interval.
 the gap between `p_i` and `p_{i+1}` is small by pre-computing the bitmask
 array for different gaps (2, 4, 6, 8), multiple p could be handled at once.
 
-TODO: Implement this. Maybe also handling more than 2 at a time.
-
+This is implement in the `gap_mask` branch, it's 20-30% faster but not well
+tested enough to check into `main`.
 
 ## Benchmark
 

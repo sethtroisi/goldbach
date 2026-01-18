@@ -30,10 +30,13 @@ using std::vector;
 using namespace std::chrono;
 
 void goldbach_search(const struct Config &config);
-void goldbach_search_single(const Config &config);
+uint64_t goldbach_search_single(const Config &config);
 
 constexpr uint32_t THREAD_SPACING = 256'000;
 constexpr uint32_t OVERLAP = 1024 + 512;
+
+constexpr uint32_t MAX_MASK_GAP = 36;
+const size_t GAP_INDEXES = MAX_MASK_GAP / 2;
 
 // See https://oeis.org/A025019 and
 // "EMPIRICAL VERIFICATION OF THE EVEN GOLDBACH CONJECTURE" by TOMAS OLIVEIRA e SILVA
@@ -127,41 +130,42 @@ bool set_max(uint16_t q_i) {
 }
 
 const size_t MASK_BITS = 64;
-void generate_P_masks(vector<uint16_t> P, vector<uint64_t> *maskss) {
-    for (size_t i = 0; i < MASK_BITS; i++) {
-        auto &masks = maskss[i];
+void generate_P_masks(vector<uint16_t> P, vector<uint64_t> maskss[][MASK_BITS]) {
+    const uint32_t MASK_SHIFT = 6; // log2(MASK_BITS)
+    const uint32_t BIT_LOWER = (1 << MASK_SHIFT) - 1;
+    assert( MASK_BITS == (1 << MASK_SHIFT) );
 
-        uint64_t mask = 0;
-        uint32_t offset = 0;
-        for (const auto p : P) {
-            uint32_t bit = (i - offset) + (p+1) / 2;
-            if (bit >= MASK_BITS) {
-                masks.push_back(mask);
-                mask = 0;
-                offset += MASK_BITS;
-                bit -= MASK_BITS;
-                assert( bit < MASK_BITS );
-                mask = 0;
-            }
-            mask |= 1UL << bit;
-        }
-        if (mask > 0) {
-            masks.push_back(mask);
-        }
+    for (size_t gap_i = 0; gap_i < GAP_INDEXES; gap_i++) {
+        for (size_t i = 0; i < MASK_BITS; i++) {
+            auto &masks = maskss[gap_i][i];
 
-        if (false) {
-            printf("mask(%lu) =", i);
-            for (auto mask : masks) {
-                printf(" %16lx", mask);
+            masks.resize( ((i + gap_i + (P.back() + 1) / 2) >> MASK_SHIFT) + 1, 0);
+
+            for (const auto p : P) {
+                uint32_t bit = i + (p+1) / 2;
+                assert( (bit >> MASK_SHIFT) < masks.size() );
+                masks[bit >> MASK_SHIFT] |= 1UL << (bit & BIT_LOWER);
+
+                bit = i + gap_i + (p+1) / 2;
+                assert( (bit >> MASK_SHIFT) < masks.size() );
+                masks[bit >> MASK_SHIFT] |= 1UL << (bit & BIT_LOWER);
             }
-            printf("\n");
+
+            if (false) {
+                printf("maskss[%lu][%lu] =", gap_i, i);
+                for (auto mask : masks) {
+                    printf(" %16lx", mask);
+                }
+                printf("\n");
+            }
         }
     }
 }
 
 void goldbach_search(const Config &config) {
+    uint64_t total_primes = 0;
     if (config.threads == 1) {
-        goldbach_search_single(config);
+        total_primes += goldbach_search_single(config);
     } else {
         // Not the best split but what ever
         uint64_t spaces = (config.n_1 - config.n_0) / THREAD_SPACING + 1;
@@ -173,17 +177,18 @@ void goldbach_search(const Config &config) {
             config_t.n_1 = config.n_0 + ((t+1) * spaces / config.threads) * THREAD_SPACING;
             config_t.thread_i = t;
             printf("\t[%lu, %lu]\n", config_t.n_0, config_t.n_1);
-            goldbach_search_single(config_t);
+            total_primes += goldbach_search_single(config_t);
         }
     }
+    printf("\tTotal Primes: %lu", total_primes);
 }
 
-void goldbach_search_single(const Config &config) {
+uint64_t goldbach_search_single(const Config &config) {
     vector<uint16_t> P;
     primesieve::generate_primes(3, config.K, &P);
 
     // 64 copies of P mask depending on what bit we start at
-    vector<uint64_t> P_masks[MASK_BITS];
+    vector<uint64_t> P_masks[GAP_INDEXES][MASK_BITS];
     generate_P_masks(P, P_masks);
 
     // See https://oeis.org/A025019 and
@@ -195,8 +200,9 @@ void goldbach_search_single(const Config &config) {
     const auto n_1 = config.n_1;
     printf("Searching [%lu, %lu] P <= %u, spacing = %u (overlap: %u, <= %u primes)\n",
             n_0, n_1, config.K, THREAD_SPACING, OVERLAP, PRIMES_SIZE);
-    printf("\t|P| = %lu (%lu masks)\n", P.size(), P_masks[31].size());
-    printf("\n");
+    if (config.thread_i <= 0) {
+        printf("\t|P| = %lu (%lu-%lu masks)\n", P.size(), P_masks[0][0].size(), P_masks[GAP_INDEXES-1][MASK_BITS-1].size());
+    }
     assert( n_1 >= n_0 );
     assert( (unsigned) config.K <= OVERLAP );
     assert( OVERLAP <= MAX_Q );
@@ -208,13 +214,17 @@ void goldbach_search_single(const Config &config) {
     size_t THREAD_UINT64_PER = THREAD_BYTES / 8;
     size_t OVERLAP_BYTES = OVERLAP / (2 * 8);
 
-    uint64_t *cleared = (uint64_t*) calloc(THREAD_BYTES + OVERLAP_BYTES, 1);
+    // This is the double loop of primes and primes <= K
+    // +1 handles if gap overflows
+    uint64_t *cleared = (uint64_t*) calloc(THREAD_BYTES + OVERLAP_BYTES + 1, 1);
     uint64_t *overlap = cleared + THREAD_UINT64_PER;
     uint64_t *cleared_after_overlap = cleared + (OVERLAP_BYTES / 8);
 
     uint64_t prime_start = 0;
     uint64_t prime_end = 0;
+    uint64_t total_primes = 0;
 
+    // XXX: Comment on how these are used would be nice.
     array<uint64_t, PRIMES_SIZE> circular_primes;
 
     size_t NON_OVERLAPPED_BYTES = THREAD_BYTES - OVERLAP_BYTES;
@@ -238,6 +248,7 @@ void goldbach_search_single(const Config &config) {
         assert( n_0 >= OVERLAP );
         uint64_t prime;
         for (prime = it.next_prime(); prime < n_0 - OVERLAP; prime = it.next_prime()) {
+            // Needed for brute if nothing clears early items.
             circular_primes[prime_end++] = prime;
         }
         for (; prime < n_0; prime = it.next_prime()) {
@@ -252,10 +263,15 @@ void goldbach_search_single(const Config &config) {
                 }
             }
         }
+        assert(prime > n_0);
+        // Reset the iterator so next_prime below is first prime > n_0
+        prime = it.prev_prime();
+
         assert(prime_end <= PRIMES_SIZE);
     }
 
     uint64_t prime = it.next_prime();
+    total_primes += 1;
     for (uint64_t m_i = 0 ; m_i < M_COUNT; m_i ++) {
         uint64_t M_0 = n_0 + M * m_i;
         uint64_t M_1 = M_0 + M-1;
@@ -285,21 +301,76 @@ void goldbach_search_single(const Config &config) {
         assert(M_0 <= prime && prime < M_0 + MAX_PRIME_GAP);
         auto search_t = high_resolution_clock::now();
 
-        for (; prime <= M_1; prime = it.next_prime()) {
-            circular_primes[prime_end++] = prime;
-            if (prime_end == PRIMES_SIZE) prime_end = 0;
-
-            uint64_t i = prime - M_0;
-            assert( i <= M );
+        if (true) {
+            // Fast mask strategy
             if (true) {
-                // Fast mask strategy
+                for (; prime <= M_1 - MAX_PRIME_GAP; prime = it.next_prime()) {
+                    circular_primes[prime_end++] = prime;
+                    total_primes += 1;
+                    if (prime_end == PRIMES_SIZE) prime_end = 0;
+
+                    uint64_t after_prime = it.next_prime();
+                    assert( after_prime <= M_1 );
+                    circular_primes[prime_end++] = after_prime;
+                    total_primes += 1;
+                    if (prime_end == PRIMES_SIZE) prime_end = 0;
+
+                    uint64_t g = after_prime - prime;
+                    if (g < MAX_MASK_GAP) {
+                        uint64_t i = prime - M_0;
+                        assert( i <= M );
+                        uint32_t t = i >> 1;
+                        uint32_t mask_index = t & (MASK_BITS-1);
+                        uint32_t c_i = i >> 7; // t >> 6;
+
+                        for (const auto mask : P_masks[g/2][mask_index]) {
+                            cleared[c_i++] |= mask;
+                        }
+                    } else {
+                        uint64_t i = prime - M_0;
+                        assert( i <= M );
+                        uint32_t t = i >> 1;
+                        uint32_t mask_index = t & (MASK_BITS-1);
+                        uint32_t c_i = i >> 7; // t >> 6;
+
+                        for (const auto mask : P_masks[0][mask_index]) {
+                            cleared[c_i++] |= mask;
+                        }
+
+                        // Handle after_prime
+                        i = after_prime - M_0;
+                        assert( i <= M );
+                        t = i >> 1;
+                        mask_index = t & (MASK_BITS-1);
+                        c_i = i >> 7; // t >> 6;
+                        for (const auto mask : P_masks[0][mask_index]) {
+                            cleared[c_i++] |= mask;
+                        }
+                    }
+                }
+            }
+            for (; prime <= M_1; prime = it.next_prime()) {
+                circular_primes[prime_end++] = prime;
+                total_primes += 1;
+                if (prime_end == PRIMES_SIZE) prime_end = 0;
+
+                uint64_t i = prime - M_0;
+                assert( i <= M );
                 uint32_t t = i >> 1;
                 uint32_t mask_index = t & (MASK_BITS-1);
                 uint32_t c_i = i >> 7; // t >> 6;
-                for (auto mask : P_masks[mask_index]) {
+
+                for (const auto mask : P_masks[0][mask_index]) {
                     cleared[c_i++] |= mask;
                 }
-            } else {
+            }
+        } else {
+            for (; prime <= M_1; prime = it.next_prime()) {
+                circular_primes[prime_end++] = prime;
+                total_primes += 1;
+                if (prime_end == PRIMES_SIZE) prime_end = 0;
+
+                uint64_t i = prime - M_0;
                 // Slower prime-by-prime method of masking of bits.
                 for (const uint32_t q : P) {
                     uint32_t t = (i + q) >> 1;
@@ -339,7 +410,8 @@ void goldbach_search_single(const Config &config) {
                         if (!(bits & (1UL << j))) {
                             brute_searches++;
                             uint64_t t = M_0 + 2*(MASK_BITS*i+j);
-                            if (t > 4) {
+                            if (t > 4) { // Ignore 2,4 which require 2 the oddest prime :)
+
                                 // Could be (t - K) but that verifies less
                                 while (circular_primes[prime_i] < t) {
                                     assert( prime_i != prime_end ); // Can't advance past prime_end
@@ -401,15 +473,18 @@ void goldbach_search_single(const Config &config) {
         memset(cleared_after_overlap, 0, NON_OVERLAPPED_BYTES);
 
         if (m_i < 10 || (m_i + 5 > M_COUNT)
-                || (m_i < 1024 && ((m_i & 127) == 0))
+                || (m_i < 1024 && ((m_i & 255) == 0))
                 || (m_i < 10240 && ((m_i & 2047) == 0))
                 || ((m_i & 0xFFFFF) == 0)) {
-            printf("\t[%lu, %lu] (%.1f%%) (brute: %lu)\n",
-                   M_0, M_1, 100.0 * m_i / M_COUNT, brute_searches);
+            if (config.thread_i <= 0) {
+                printf("\t%lu = [%lu, %lu] (%.1f%%) (brute: %lu)\n",
+                       m_i, M_0, M_1, 100.0 * m_i / M_COUNT, brute_searches);
+            }
         }
     }
 
-    printf("\t[%lu, %lu) took %.1f = setup %.1f, search %.1f, verify %.1f\n",
+    printf("\t[%lu, %lu) took %.1f = setup %.1f, search %.1f, verify %.1f | total primes: %lu\n",
             n_0, n_1, setup_time + search_time + brute_time,
-            setup_time, search_time, brute_time);
+            setup_time, search_time, brute_time, total_primes);
+    return total_primes;
 }

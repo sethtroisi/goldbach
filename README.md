@@ -35,6 +35,15 @@ needed to account for `p mod 64`.
 
 This problem is trivially parallelized by splitting found to ranges.
 
+A small amount of care is needed for ranges near the end of the interval.
+
+### Combining p
+
+the gap between `p_i` and `p_{i+1}` is small by pre-computing the bitmask
+array for different gaps (2, 4, 6, 8), multiple p could be handled at once.
+
+TODO: Implement this. Maybe also handling more than 2 at a time.
+
 
 ## Benchmark
 
